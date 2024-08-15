@@ -26,15 +26,15 @@ __global__ void cute_gemm_v00(
 
     // global tile tensor
     auto cta_coord = make_coord(blockIdx.y, blockIdx.x, _);
-    Tensor gA = local_tile(mA, cta_tiler, cta_coord, Step<_1, X, _1>{}); // BLOCK_TILE_SIZE_M x BLOCK_TILE_SIZE_K x num_tiles_k
-    Tensor gB = local_tile(mB, cta_tiler, cta_coord, Step<X, _1, _1>{}); // BLOCK_TILE_SIZE_N x BLOCK_TILE_SIZE_K x num_tiles_k
+    Tensor gA = local_tile(mA, cta_tiler, cta_coord, Step<_1, X, _1>{}); // BLOCK_TILE_SIZE_M x BLOCK_TILE_SIZE_K x NUM_TILES_K
+    Tensor gB = local_tile(mB, cta_tiler, cta_coord, Step<X, _1, _1>{}); // BLOCK_TILE_SIZE_N x BLOCK_TILE_SIZE_K x NUM_TILES_K
     Tensor gC = local_tile(mC, cta_tiler, cta_coord, Step<_1, _1, X>{}); // BLOCK_TILE_SIZE_M x BLOCK_TILE_SIZE_N
 
     ThrMMA thr_mma = tiled_mma.get_thread_slice(threadIdx.x);
 
     // partition gA, gB, gC
-    Tensor tAgA = thr_mma.partition_A(gA);  // (MMA,MMA_M,MMA_K, num_tiles_k)
-    Tensor tBgB = thr_mma.partition_B(gB);  // (MMA,MMA_N,MMA_K, num_tiles_k)
+    Tensor tAgA = thr_mma.partition_A(gA);  // (MMA,MMA_M,MMA_K, NUM_TILES_K)
+    Tensor tBgB = thr_mma.partition_B(gB);  // (MMA,MMA_N,MMA_K, NUM_TILES_K)
     Tensor tCgC = thr_mma.partition_C(gC);  // (MMA,MMA_M,MMA_N)
 
     // make fragments in thread registers
@@ -44,15 +44,15 @@ __global__ void cute_gemm_v00(
     
     clear(tCrC);
 
-    auto num_tiles_k = size<3>(tAgA);
+    auto NUM_TILES_K = size<3>(tAgA);
     
     #pragma unroll 1
-    for (int k_tile = 0; k_tile < num_tiles_k; ++k_tile) {
+    for (int k_tile = 0; k_tile < NUM_TILES_K; ++k_tile) {
         // copy from global memory to thread private memory
         copy(tAgA(_, _, _, k_tile), tArA);
         copy(tBgB(_, _, _, k_tile), tBrB);
 
-        // no need to sync here because the compute is independent with other threads
+        // no need to sync here because the compute is independent with other threads (or the copy is not asynchronous?)
 
         // compute
         gemm(tiled_mma, tCrC, tArA, tBrB, tCrC);

@@ -26,15 +26,15 @@ int main()
     // all matrices are in column major
     // A (m,k) --> transpose --> A(k, m) --> cute layout: A (m, k) : (k, 1) --> lda = k
     // B (k,n) --> cute layout: B (n, k) : (k, 1) --> ldb = k
-    // C (m,n) --> cute layout: C (m, n) : (1, n) --> ldc = n
+    // C (m,n) --> cute layout: C (m, n) : (1, m) --> ldc = m
 
     constexpr size_t lda{(k + 16U - 1U) / 16U * 16U};
     constexpr size_t ldb{(k + 16U - 1U) / 16U * 16U};
-    constexpr size_t ldc{(n + 16U - 1U) / 16U * 16U};
+    constexpr size_t ldc{(m + 16U - 1U) / 16U * 16U};
 
     static_assert(lda >= k);
     static_assert(ldb >= k);
-    static_assert(ldc >= n);
+    static_assert(ldc >= m);
 
     std::cout << "Matrix size: " << m << " x " << n << " x " << k << std::endl;
     std::cout << "Matrix A: " << m << " x " << k << " Leading Dimension Size " << lda << std::endl;
@@ -55,6 +55,8 @@ int main()
                                     {"official cute gemm kernel V01", launch_official_cute_gemm_v01<cute::half_t>},
                                     {"official cute gemm kernel V02", launch_official_cute_gemm_v02<cute::half_t>},
                                     {"custom cute gemm kernel V00", launch_cute_gemm_kernel_v00<cute::half_t>}, 
+                                    {"custom cute gemm kernel V01", launch_cute_gemm_kernel_v01<cute::half_t>},
+                                    {"custom cute gemm kernel V02", launch_cute_gemm_kernel_v02<cute::half_t>}
                                 };
 
     for (auto gemm_kernel_launch_function : gemm_kernel_launch_functions) {

@@ -23,7 +23,7 @@ int main()
     // all matrices are in column major
     // A (m,k) --> transpose --> A(k, m) --> cute layout: A (m, k) : (k, 1) --> lda = k
     // B (k,n) --> cute layout: B (n, k) : (k, 1) --> ldb = k
-    // C (m,n) --> cute layout: C (m, n) : (1, n) --> ldc = n
+    // C (m,n) --> cute layout: C (m, n) : (1, m) --> ldc = m
 
     constexpr size_t lda{(m + 16U - 1U) / 16U * 16U};
     constexpr size_t ldb{(k + 16U - 1U) / 16U * 16U};
@@ -31,7 +31,7 @@ int main()
 
     static_assert(lda >= k);
     static_assert(ldb >= n);
-    static_assert(ldc >= n);
+    static_assert(ldc >= m);
 
     std::cout << "Matrix size: " << m << " x " << n << " x " << k << std::endl;
     std::cout << "Matrix A: " << m << " x " << k << " Leading Dimension Size " << lda << std::endl;
