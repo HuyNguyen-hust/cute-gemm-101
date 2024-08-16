@@ -137,7 +137,7 @@ void launch_cute_gemm_kernel_v01(
     // block shape and cta tiler
     // additional dim: NUM_STAGES --> This is for later pipelining the k-slice GEMM
     auto BLOCK_SIZE_M = _128{};
-    auto BLOCK_SIZE_N = _256{};
+    auto BLOCK_SIZE_N = _128{};
     auto BLOCK_SIZE_K = _32{};
     using CtaTiler = decltype(make_shape(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K));
 

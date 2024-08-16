@@ -25,6 +25,7 @@ add_library(cuda_gemm
             cutlass_cute_00_block_tiling_thread_tiling_without_shared_memory.cu
             cutlass_cute_01_block_tiling_thread_tiling_with_swizzle_shared_memory.cu
             cutlass_cute_02_block_tiling_thread_tiling_with_swizzle_shared_memory_pipeline.cu
+            cutlass_cute_03_block_tiling_thread_tiling_with_swizzle_shared_memory_pipeline_epilouge.cu
             profile_utils.cu
             cuda_utils.cu)
 # include directories for cuda_gemm

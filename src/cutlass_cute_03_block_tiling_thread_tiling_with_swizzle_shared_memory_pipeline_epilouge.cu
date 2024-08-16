@@ -6,12 +6,13 @@
 template <
     class T, 
     class CtaTiler,
-    class SmemLayoutA, class SmemLayoutB,
+    class SmemLayoutA, class SmemLayoutB, class SmemLayoutC,
     class TiledMMA,
     class G2STiledCopyA, class G2STiledCopyB,
-    class S2RCopyAtomA, class S2RCopyAtomB
+    class S2RCopyAtomA, class S2RCopyAtomB,
+    class R2SCopyAtomC, class S2GTiledCopyC
 >
-__global__ void cute_gemm_v02(
+__global__ void cute_gemm_v03(
     unsigned int M, unsigned int N, unsigned int K,
     const T alpha,
     const T *A, size_t lda,
@@ -133,7 +134,7 @@ __global__ void cute_gemm_v02(
     // loop over tiles
     auto NUM_TILES_K = size<3>(tAgA);
 
-    CUTE_NO_UNROLL
+    CUTE_NO_UNROLL // this cannot be unrolled, slice-k requires computation must be finished tile by tile
     for (int tile = 0; tile < NUM_TILES_K; ++tile)
     {
         auto MMA_K = size<2>(tCrA);
@@ -178,12 +179,64 @@ __global__ void cute_gemm_v02(
         }
     }
 
-    axpby(alpha, tCrC, beta, tCgC);
+    // epilouge
+    // sC
+    auto sC = make_tensor(sA(_, _, ismem_read).data(), SmemLayoutC{});
+
+    // register to shared memory
+    auto r2s_tiled_copy_c = make_tiled_copy_C(R2SCopyAtomC{}, tiled_mma);
+    auto r2s_thr_copy_c = r2s_tiled_copy_c.get_slice(threadIdx.x);
+    const auto tCrC_r2s = r2s_thr_copy_c.retile_S(tCrC);  // CPY x CPY_M x CPY_N
+    auto tCsC_r2s = r2s_thr_copy_c.partition_D(sC); // CPY x 1 x 1 x kSmemLayoutCBatch
+
+    // copy from shared memory to global memory
+    auto s2g_tiled_copy_c = S2GTiledCopyC{};
+    auto s2g_thr_copy_c = s2g_tiled_copy_c.get_slice(threadIdx.x);
+    const auto tCsC_s2g = s2g_thr_copy_c.partition_S(sC); // CPY x 1 x 1 x kSmemLayoutCBatch
+    auto tCgC_s2g = s2g_thr_copy_c.partition_D(gC);  // CPY x CPY_M x CPY_N
+
+    // why CPY x 1 x 1 x kSmemLayoutCBatch
+    // because both r2s_tiled_copy_c and s2g_tiled_copy_c are of size 1 problem shape
+    // and the SmemLayoutC is of size 1 problem shape too, there is no repetition in the problem shape
+    // after first 3 dimensions, other dimensions are kept the same --> kSmemLayoutCBatch
+
+    // so we need to do the total number of MMA_M x MMA_N copies
+    // fold the copies from 2D to 1D
+
+    auto tCrC_r2s_1d = group_modes<1, 3>(tCrC_r2s);
+    auto tCgC_s2g_1d = group_modes<1, 3>(tCgC_s2g);
+    // Why <1, 3>?, it works like python slicing (CPY, CPY_M, CPY_N) --> (CPY, (CPY_M, CPY_N))
+
+    auto MMA_MN = size<1>(tCrC_r2s_1d);
+    auto NUM_PIPES = size<3>(tCsC_s2g); //kSmemLayoutCBatch
+    
+    CUTE_UNROLL
+    for (int i = 0; i < MMA_MN; i+=NUM_PIPES)
+    {   
+        CUTE_UNROLL
+        for (int j = 0; j < NUM_PIPES; j++)
+        {
+            auto t = make_tensor_like<T>(tCrC_r2s_1d(_, i+j));
+            copy(tCrC_r2s_1d(_, i+j), t);
+            // I dont understand this part
+            copy(r2s_tiled_copy_c, t, tCsC_r2s(_, 0, 0, j));
+        }
+        __syncthreads();
+        
+        CUTE_UNROLL
+        for (int j = 0; j < NUM_PIPES; j++)
+        {
+            copy(s2g_tiled_copy_c, tCsC_s2g(_, 0, 0, j), tCgC_s2g_1d(_, i+j));
+        }
+        __syncthreads();
+    }
+
+    axpby(alpha, tCgC, beta, tCgC);
 }
 
 // launch
 template <typename T>
-void launch_cute_gemm_kernel_v02(
+void launch_cute_gemm_kernel_v03(
     size_t m, size_t n, size_t k,
     const T *alpha,
     const T *A, size_t lda,
@@ -206,6 +259,7 @@ void launch_cute_gemm_kernel_v02(
     auto BLOCK_SIZE_N = _128{};
     auto BLOCK_SIZE_K = _32{};
     auto NUM_STAGES = _5{};
+    auto kSmemLayoutCBatch = _2{};
     using CtaTiler = decltype(make_shape(BLOCK_SIZE_M, BLOCK_SIZE_N, BLOCK_SIZE_K));
 
     // smem layout
@@ -321,9 +375,41 @@ void launch_cute_gemm_kernel_v02(
     using S2RCopyAtomA = s2r_copy_atom;
     using S2RCopyAtomB = s2r_copy_atom;
 
-    // print_latex(
-    //     make_tiled_copy(S2RCopyAtomA{}, make_layout(Shape<_32>{}), make_layout(Shape<_1, _8>{}))
-    // );
+    // efficient epilouge: write back C: register files --> smem --> gmem
+    // take use of space for Asmem for C (It's not actually C, It's just a temporary intermediate buffer with slot size equal 1 problem shape, but call C for short)
+    // C layout atom: one problem shape (handled by 128 threads)
+    using SmemLayoutCAtom = decltype(
+        composition(
+            Swizzle<2, 3, 3>{},
+            make_layout(
+                make_shape(Int<MmaVM>{}, Int<MmaVN>{}) // C is in col-major
+            )     
+        )
+    );
+
+    using SmemLayoutC = decltype(
+        tile_to_shape(
+            SmemLayoutCAtom{},
+            make_shape(Int<MmaVM>{}, Int<MmaVN>{}, Int<kSmemLayoutCBatch>{})
+        )
+    );
+
+    // be sure that the SmemLayoutA's one pipe is larger than SmemLayoutC, then you can take use of space for Asmem
+    static_assert(size<0>(SmemLayoutA{}) * size<1>(SmemLayoutA{}) >= size(SmemLayoutC{}), "SmemLayoutA's one pipe must be larger than SmemLayoutC");
+    
+    // CopyAtom from register to registers
+    using S2RCopyAtomC = Copy_Atom<UniversalCopy<T>, T>;
+
+    // TiledCopy from shared memory to global memory
+    // This is for copy problem shape 4 x 32 of uint128_t (or 32x32 of halfs)
+    using S2GCopyAtomC = Copy_Atom<UniversalCopy<uint128_t>, T>;
+    using S2GTiledCopyC = decltype(
+        make_tiled_copy(
+            S2RCopyAtomC{},
+            Layout<Shape<_4, _32>>{},
+            Layout<Shape<_8>>{}
+        )
+    );
 
     // grid, block
     dim3 block{size(TiledMMA{}), 1U, 1U};
@@ -335,23 +421,25 @@ void launch_cute_gemm_kernel_v02(
 
     static constexpr int smem_size = (cosize_v<SmemLayoutA> + cosize_v<SmemLayoutB>) * sizeof(T);
     cudaFuncSetAttribute(
-        cute_gemm_v02 <
+        cute_gemm_v03 <
             T,
             CtaTiler,
-            SmemLayoutA, SmemLayoutB,
+            SmemLayoutA, SmemLayoutB, SmemLayoutC,
             TiledMMA,
             G2STiledCopyA, G2STiledCopyB,
-            S2RCopyAtomA, S2RCopyAtomB
+            S2RCopyAtomA, S2RCopyAtomB,
+            S2RCopyAtomC, S2GTiledCopyC
         >, cudaFuncAttributeMaxDynamicSharedMemorySize, smem_size);
 
     // kernel
-    cute_gemm_v02 <
+    cute_gemm_v03 <
         T,
         CtaTiler,
-        SmemLayoutA, SmemLayoutB,
+        SmemLayoutA, SmemLayoutB, SmemLayoutC,
         TiledMMA,
         G2STiledCopyA, G2STiledCopyB,
-        S2RCopyAtomA, S2RCopyAtomB
+        S2RCopyAtomA, S2RCopyAtomB,
+        S2RCopyAtomC, S2GTiledCopyC
     >
     <<<grid, block, smem_size>>>(
         M, N, K,
@@ -364,7 +452,7 @@ void launch_cute_gemm_kernel_v02(
 }
 
 // explicit instantiation
-template void launch_cute_gemm_kernel_v02<cute::half_t>(
+template void launch_cute_gemm_kernel_v03<cute::half_t>(
     size_t m, size_t n, size_t k,
     const cute::half_t *alpha,
     const cute::half_t *A, size_t lda,

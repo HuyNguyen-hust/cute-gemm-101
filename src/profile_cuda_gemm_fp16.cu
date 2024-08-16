@@ -13,7 +13,7 @@ int main()
     print_device_info();
 
     constexpr size_t num_repeats{1U};
-    constexpr size_t num_warmups{1U};
+    constexpr size_t num_warmups{2U};
 
     cute::half_t const fp16_abs_tol{__float2half(5.0e-2f)};
     double const fp16_rel_tol{1.0e-1f};
@@ -52,11 +52,12 @@ int main()
                                 const cute::half_t*,
                                 cute::half_t*, size_t,
                                 cudaStream_t)>>> const gemm_kernel_launch_functions {
-                                    {"official cute gemm kernel V01", launch_official_cute_gemm_v01<cute::half_t>},
-                                    {"official cute gemm kernel V02", launch_official_cute_gemm_v02<cute::half_t>},
-                                    {"custom cute gemm kernel V00", launch_cute_gemm_kernel_v00<cute::half_t>}, 
+                                    // {"official cute gemm kernel V01", launch_official_cute_gemm_v01<cute::half_t>},
+                                    // {"official cute gemm kernel V02", launch_official_cute_gemm_v02<cute::half_t>},
+                                    // {"custom cute gemm kernel V00", launch_cute_gemm_kernel_v00<cute::half_t>}, 
                                     {"custom cute gemm kernel V01", launch_cute_gemm_kernel_v01<cute::half_t>},
-                                    {"custom cute gemm kernel V02", launch_cute_gemm_kernel_v02<cute::half_t>}
+                                    {"custom cute gemm kernel V02", launch_cute_gemm_kernel_v02<cute::half_t>},
+                                    {"custom cute gemm kernel V03", launch_cute_gemm_kernel_v03<cute::half_t>}
                                 };
 
     for (auto gemm_kernel_launch_function : gemm_kernel_launch_functions) {
